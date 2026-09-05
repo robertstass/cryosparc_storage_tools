@@ -2059,8 +2059,8 @@ let viewMode = 'card';
 let treeInitialized = false;
 let treePan = {{ x: 40, y: 40 }};
 let treeZoom = 1;
-const TREE_LAYER_W = 230;
-const TREE_NODE_H = 84;
+const TREE_LAYER_H = 130;  // vertical spacing between layers (generations), top to bottom
+const TREE_NODE_W = 190;   // horizontal spacing between nodes within a layer
 
 function setViewMode(mode) {{
   viewMode = mode;
@@ -2121,7 +2121,7 @@ function computeTreeLayout() {{
 
   const pos = {{}};
   layers.forEach((layerJobs, li) => {{
-    layerJobs.forEach((uid, oi) => {{ pos[uid] = {{ x: li * TREE_LAYER_W, y: oi * TREE_NODE_H }}; }});
+    layerJobs.forEach((uid, oi) => {{ pos[uid] = {{ x: oi * TREE_NODE_W, y: li * TREE_LAYER_H }}; }});
   }});
   return pos;
 }}
@@ -2192,18 +2192,18 @@ function renderTree() {{
   const svg = document.getElementById('tree-edges');
   svg.innerHTML = '';
   const ns = 'http://www.w3.org/2000/svg';
-  const NODE_W = 160, NODE_HALF_H = 25;
+  const NODE_W = 160, NODE_H = 50;
   let maxX = 0, maxY = 0;
   for (const j of JOBS) {{
     for (const parentId of (j.parents || [])) {{
       if (!byId[parentId] || !positions[parentId]) continue;
       const pp = positions[parentId], cp = positions[j.id];
-      const x1 = pp.x + NODE_W, y1 = pp.y + NODE_HALF_H;
-      const x2 = cp.x, y2 = cp.y + NODE_HALF_H;
+      const x1 = pp.x + NODE_W / 2, y1 = pp.y + NODE_H;
+      const x2 = cp.x + NODE_W / 2, y2 = cp.y;
       maxX = Math.max(maxX, x1, x2); maxY = Math.max(maxY, y1, y2);
-      const midX = (x1 + x2) / 2;
+      const midY = (y1 + y2) / 2;
       const path = document.createElementNS(ns, 'path');
-      path.setAttribute('d', `M ${{x1}} ${{y1}} C ${{midX}} ${{y1}}, ${{midX}} ${{y2}}, ${{x2}} ${{y2}}`);
+      path.setAttribute('d', `M ${{x1}} ${{y1}} C ${{x1}} ${{midY}}, ${{x2}} ${{midY}}, ${{x2}} ${{y2}}`);
       path.setAttribute('fill', 'none');
       const highlighted = selectedId && (parentId === selectedId || j.id === selectedId);
       path.setAttribute('stroke', catColor(byId[parentId].category));
