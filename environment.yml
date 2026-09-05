@@ -1,0 +1,14 @@
+name: cryosparc-storage-tools
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.9
+  - numpy
+  - mrcfile
+  - pymongo
+  - beautifulsoup4
+  - plotly
+  - matplotlib
+  - pip
+  - pip:
+      - cryosparc-tools

@@ -1,0 +1,38 @@
+[project]
+name = "cryosparc-storage-tools"
+version = "0.1.0"
+description = "Utilities for archiving, cleaning, scanning, and visualizing CryoSPARC project storage."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "numpy",
+    "mrcfile",
+    "pymongo",
+    "cryosparc-tools",
+    "beautifulsoup4",
+    "plotly",
+    "matplotlib",
+]
+
+[project.scripts]
+cryosparc-archive = "cryosparc_archive:main"
+cryosparc-live-clear-particles = "cryosparc_live_clear_particles:main"
+cryosparc-storage-scan = "cryosparc_storage_scan:main"
+cryosparc-storage-display = "cryosparc_storage_display:main"
+cryosparc-manage-projectdata-to-csv = "cryosparc_manage_projectData_to_csv:main"
+cryosparc-project-sources-owner-directory = "cryosparc_project_sources_owner_directory:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = [
+    "cryosparc_archive",
+    "cryosparc_live_clear_particles",
+    "cryosparc_storage_scan",
+    "cryosparc_storage_display",
+    "cryosparc_manage_projectData_to_csv",
+    "cryosparc_project_sources_owner_directory",
+]
