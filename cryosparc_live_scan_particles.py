@@ -195,7 +195,7 @@ def format_findings(scans: Sequence[LiveSessionScan], scan_mode: str) -> list[st
                 lines.append(f"    WARNING: {scan.unreadable_samples} file(s) could not be stat'ed")
         lines.append("")
         lines.append(
-            "To reclaim space, run cryosparc_live_clear_particles.py with the "
+            "To reclaim space, run cryosparc-live-clear-particles with the "
             "matching --project-dir and --live-uid (start with --dry-run)."
         )
     else:
