@@ -40,43 +40,66 @@ def human_size(num_bytes):
 
 
 def directory_size(root):
-    """Sum sizes of regular files below root without following symlinks."""
+    """Sum sizes of regular files below root without following symlinks.
+
+    Uses os.scandir directly so the type check per entry is free (cached
+    d_type from the directory read) rather than an extra isfile()+islink()
+    stat/lstat pair on top of the getsize() stat that's already unavoidable.
+    """
     total = 0
     if not root.is_dir():
         return total
 
-    for dirpath, dirnames, filenames in os.walk(str(root), followlinks=False):
-        dirnames[:] = [
-            d for d in dirnames
-            if not os.path.islink(os.path.join(dirpath, d))
-        ]
-        for name in filenames:
-            path = os.path.join(dirpath, name)
-            try:
-                if os.path.isfile(path) and not os.path.islink(path):
-                    total += os.path.getsize(path)
-            except OSError:
-                pass
+    dirs_to_visit = [str(root)]
+    while dirs_to_visit:
+        current = dirs_to_visit.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            dirs_to_visit.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
     return total
 
 
 def find_mrc_files(blob_dir):
-    """Return regular .mrc files below blob_dir, without following symlinks."""
+    """Return regular .mrc files below blob_dir, without following symlinks.
+
+    Walks with os.scandir directly (rather than os.walk + Path.is_file()/
+    is_symlink()) so the file-type information the OS already returns from
+    the directory read (d_type) is reused via DirEntry.is_dir()/is_file()
+    instead of issuing a fresh stat()/lstat() syscall per file. On a local
+    disk this barely matters, but on a networked CryoSPARC filesystem
+    (Lustre/NFS) the old approach's two extra stat-family calls per matched
+    file each cost a network round trip -- with the hundreds of thousands of
+    particle .mrc files a Live session can have, that alone can turn a
+    should-be-instant listing into a multi-minute hang.
+    """
     targets = []
-    for dirpath, dirnames, filenames in os.walk(str(blob_dir), followlinks=False):
-        dirnames[:] = [
-            d for d in dirnames
-            if not os.path.islink(os.path.join(dirpath, d))
-        ]
-        for name in filenames:
-            if not name.lower().endswith(".mrc"):
-                continue
-            path = Path(dirpath) / name
-            try:
-                if path.is_file() and not path.is_symlink():
-                    targets.append(path)
-            except OSError:
-                continue
+    dirs_to_visit = [str(blob_dir)]
+    while dirs_to_visit:
+        current = dirs_to_visit.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    try:
+                        # follow_symlinks=False makes symlinked directories
+                        # and symlinked files both report False here, so a
+                        # separate is_symlink() check is unnecessary.
+                        if entry.is_dir(follow_symlinks=False):
+                            dirs_to_visit.append(entry.path)
+                        elif entry.name.lower().endswith(".mrc") and entry.is_file(follow_symlinks=False):
+                            targets.append(Path(entry.path))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
     return sorted(targets)
 
 

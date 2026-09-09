@@ -328,6 +328,62 @@ def test_live_clear_dry_run(tmp: Path) -> None:
     print("OK: Live particle cleanup dry-run leaves files untouched")
 
 
+def test_find_mrc_files_avoids_per_file_stat_calls(tmp: Path) -> None:
+    """Regression test for a hang seen on networked CryoSPARC storage.
+
+    find_mrc_files()/directory_size() must classify entries using the type
+    info os.scandir() already returns (DirEntry.is_dir()/is_file()), not by
+    stat()-ing or lstat()-ing every matched file again. Each such extra call
+    is a full network round trip on Lustre/NFS, so with tens of thousands of
+    particle files a per-file stat/lstat pair alone can turn an
+    --scan-mode skip listing into a multi-minute hang. This imports the
+    functions directly (in-process) so it can count real stat/lstat calls.
+    """
+    root = tmp / "stat_call_regression"
+    blob = root / "blob" / "group1"
+    blob.mkdir(parents=True)
+    file_count = 200
+    for i in range(file_count):
+        (blob / f"p_{i:04d}.mrc").write_bytes(b"x")
+
+    sys.path.insert(0, str(HERE))
+    import importlib
+
+    import cryosparc_live_clear_particles as live_clear
+
+    importlib.reload(live_clear)  # ensure a clean module (no leftover patches)
+
+    calls = {"stat": 0, "lstat": 0}
+    orig_stat, orig_lstat = os.stat, os.lstat
+
+    def counting_stat(*a, **k):
+        calls["stat"] += 1
+        return orig_stat(*a, **k)
+
+    def counting_lstat(*a, **k):
+        calls["lstat"] += 1
+        return orig_lstat(*a, **k)
+
+    os.stat, os.lstat = counting_stat, counting_lstat
+    try:
+        targets = live_clear.find_mrc_files(blob.parent)
+    finally:
+        os.stat, os.lstat = orig_stat, orig_lstat
+
+    assert len(targets) == file_count, targets
+    total_calls = calls["stat"] + calls["lstat"]
+    # A handful of calls (directory-level checks) are fine; anywhere near
+    # one-per-file (the old isfile()+islink() pattern) is the regression.
+    assert total_calls < file_count, (
+        f"find_mrc_files() issued {total_calls} stat/lstat calls for {file_count} files "
+        "-- it should reuse os.scandir()'s cached entry type instead of a stat call per file"
+    )
+    print(
+        f"OK: find_mrc_files avoids per-file stat calls "
+        f"({total_calls} stat/lstat calls for {file_count} files)"
+    )
+
+
 def test_live_scan_particles(tmp: Path) -> None:
     root = tmp / "live_scan_root"
     project = root / "CS-live-scan"
@@ -428,6 +484,7 @@ def main() -> int:
     test_html_converter(tmp, project_dir)
     test_storage_display(tmp, jobs_csv)
     test_live_clear_dry_run(tmp)
+    test_find_mrc_files_avoids_per_file_stat_calls(tmp)
     test_live_scan_particles(tmp)
     if not KEEP_TEST_OUTPUT:
         print("Cleaning up test directory...")

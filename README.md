@@ -142,6 +142,9 @@ cryosparc-live-scan-particles projectData.csv --owner RobertS -o findings.txt
 
 `--scan-mode estimate` (the default) matches `cryosparc-live-clear-particles`'s own estimate mode: it samples up to 10 `.mrc` files per blob subdirectory and extrapolates. `--scan-mode skip` skips sizing entirely and is the quickest option for a first pass across many projects. `-o/--output` writes the same findings to a text file in addition to stdout. `--parallel` controls how many Live sessions are inspected concurrently (default 4).
 
+> [!NOTE]
+> **Performance on networked storage.** Particle counting (used by every scan mode, including `skip`) walks each session's `extract/blob` directory using `os.scandir()` and classifies entries from the directory-read's own type info, rather than re-`stat()`-ing every matched file. On local disk this makes little difference, but on Lustre/NFS-mounted CryoSPARC storage each avoided per-file `stat()`/`lstat()` call is a network round trip — with the hundreds of thousands of particle files a Live session can accumulate, the naive per-file-stat approach can turn an otherwise-instant listing into a multi-minute hang. This applies to both `cryosparc-live-scan-particles` and the particle-finding/sizing code it shares with `cryosparc-live-clear-particles`.
+
 ---
 
 ## `cryosparc-storage-scan`
