@@ -24,6 +24,7 @@ from pathlib import Path
 
 
 SAMPLE_FILES_PER_BLOB_DIR = 10
+LIVE_UID_RE = re.compile(r"^S([0-9]+)$")
 
 
 def human_size(num_bytes):
@@ -191,7 +192,7 @@ def main():
     project_dir = Path(args.project_dir).expanduser().resolve()
     live_uid = args.live_uid.strip()
 
-    if not re.match(r"^S[0-9]+$", live_uid):
+    if not LIVE_UID_RE.match(live_uid):
         print(
             "ERROR: --live-uid must look like S1, S2, S3, etc.",
             file=sys.stderr,

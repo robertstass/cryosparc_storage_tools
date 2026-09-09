@@ -3,7 +3,9 @@
 
 All tests use temporary or synthetic CryoSPARC-like directories. The Live
 particle cleanup test always uses --dry-run, so it never intentionally deletes
-particle stacks. No real CryoSPARC installation is required.
+particle stacks. The Live particle scan test only exercises the strictly
+read-only cryosparc_live_scan_particles.py. No real CryoSPARC installation is
+required.
 
 Usage:
     python test_cryosparc_storage_tools.py
@@ -326,14 +328,79 @@ def test_live_clear_dry_run(tmp: Path) -> None:
     print("OK: Live particle cleanup dry-run leaves files untouched")
 
 
+def test_live_scan_particles(tmp: Path) -> None:
+    root = tmp / "live_scan_root"
+    project = root / "CS-live-scan"
+    make_project(project, uid="P3", title="Synthetic live scan project")
+
+    # S1: has particles still on disk -> should be reported as reclaimable.
+    blob = project / "S1" / "extract" / "blob" / "group1"
+    blob.mkdir(parents=True)
+    for i in range(3):
+        (blob / f"particles_{i}.mrc").write_bytes(b"x" * (100 + i))
+
+    # S2: extract/blob exists but the .mrc files are already gone.
+    (project / "S2" / "extract" / "blob").mkdir(parents=True)
+
+    # S3: no extract directory at all (never Live-processed / different job type).
+    (project / "S3").mkdir(parents=True)
+
+    projects_csv = tmp / "live_scan_projects.csv"
+    with projects_csv.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["owner", "directory"])
+        writer.writeheader()
+        writer.writerow({"owner": "TestOwner", "directory": str(project)})
+
+    findings = tmp / "live_scan_findings.txt"
+    proc = run_script(
+        "cryosparc_live_scan_particles.py",
+        projects_csv,
+        "--scan-mode",
+        "estimate",
+        "-o",
+        findings,
+    )
+    assert "Sessions with reclaimable particle .mrc files: 1" in proc.stdout, proc.stdout
+    assert "S1" in proc.stdout and "3 mrc file(s)" in proc.stdout, proc.stdout
+    assert "already cleared" in proc.stdout, proc.stdout
+    assert "not Live-processed" in proc.stdout, proc.stdout
+    assert findings.is_file()
+
+    # Strictly read-only: every synthetic particle file must still be present.
+    remaining = sorted((blob).glob("*.mrc"))
+    assert len(remaining) == 3, remaining
+
+    # --scan-mode skip must still detect the session without reporting a size.
+    proc_skip = run_script(
+        "cryosparc_live_scan_particles.py",
+        projects_csv,
+        "--scan-mode",
+        "skip",
+    )
+    assert "Sessions with reclaimable particle .mrc files: 1" in proc_skip.stdout, proc_skip.stdout
+
+    # --owner filtering excludes the project entirely.
+    proc_owner = run_script(
+        "cryosparc_live_scan_particles.py",
+        projects_csv,
+        "--owner",
+        "NoSuchOwner",
+    )
+    assert "Discovered 0 Live session directorie(s)" in proc_owner.stdout, proc_owner.stdout
+
+    print("OK: Live particle scan (read-only) identifies reclaimable sessions")
+
+
 def main() -> int:
     required = [
         "cryosparc_archive.py",
         "cryosparc_live_clear_particles.py",
+        "cryosparc_live_scan_particles.py",
         "cryosparc_storage_scan.py",
         "cryosparc_storage_display.py",
         "cryosparc_manage_projectData_to_csv.py",
         "cryosparc_project_sources_owner_directory.py",
+        "cryosparc_project_io.py",
     ]
     missing = [name for name in required if not (HERE / name).is_file()]
     if missing:
@@ -361,6 +428,7 @@ def main() -> int:
     test_html_converter(tmp, project_dir)
     test_storage_display(tmp, jobs_csv)
     test_live_clear_dry_run(tmp)
+    test_live_scan_particles(tmp)
     if not KEEP_TEST_OUTPUT:
         print("Cleaning up test directory...")
         tempdir.cleanup()

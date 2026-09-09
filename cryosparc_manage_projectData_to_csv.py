@@ -26,23 +26,13 @@ from __future__ import annotations
 
 import argparse
 import csv
-import re
 import sys
 from pathlib import Path
 from typing import Iterable
 
 from bs4 import BeautifulSoup, Tag
 
-
-def clean_text(value: str) -> str:
-    """Normalize HTML text for CSV output."""
-    value = value.replace("\xa0", " ")
-    return re.sub(r"\s+", " ", value).strip()
-
-
-def direct_cells(row: Tag) -> list[Tag]:
-    """Return only immediate th/td children, ignoring nested-table cells."""
-    return row.find_all(["th", "td"], recursive=False)
+from cryosparc_project_io import clean_text, direct_cells, expanded_headers, unique_headers
 
 
 def table_rows(table: Tag) -> list[Tag]:
@@ -52,26 +42,6 @@ def table_rows(table: Tag) -> list[Tag]:
 
 def row_values(row: Tag) -> list[str]:
     return [clean_text(cell.get_text(" ", strip=True)) for cell in direct_cells(row)]
-
-
-def expanded_headers(row: Tag) -> list[str]:
-    """Expand colspan cells so the header width matches data-cell width."""
-    headers: list[str] = []
-    for cell in direct_cells(row):
-        text = clean_text(cell.get_text(" ", strip=True))
-        try:
-            span = max(1, int(cell.get("colspan", 1)))
-        except (TypeError, ValueError):
-            span = 1
-        if span == 1:
-            headers.append(text)
-        else:
-            # A grouped heading such as CryoSPARC's "Most Recent Workspace"
-            # spans several underlying columns. Preserve the group name and
-            # add numbered suffixes rather than silently dropping data.
-            for i in range(1, span + 1):
-                headers.append(text if i == 1 else f"{text}_{i}")
-    return headers
 
 
 def find_header_row(table: Tag, required_terms: Iterable[str] = ()) -> tuple[Tag, list[str]]:
@@ -110,17 +80,6 @@ def find_header_row(table: Tag, required_terms: Iterable[str] = ()) -> tuple[Tag
         _, header, headers = max(candidates, key=lambda x: x[0])
 
     return header, headers
-
-
-def unique_headers(headers: list[str]) -> list[str]:
-    """Make headers non-empty and unique while preserving order."""
-    result: list[str] = []
-    used: dict[str, int] = {}
-    for index, header in enumerate(headers, start=1):
-        base = clean_text(header) or f"column_{index}"
-        used[base] = used.get(base, 0) + 1
-        result.append(base if used[base] == 1 else f"{base}_{used[base]}")
-    return result
 
 
 def extract_table(table: Tag, required_terms: Iterable[str] = ()) -> tuple[list[str], list[list[str]]]:

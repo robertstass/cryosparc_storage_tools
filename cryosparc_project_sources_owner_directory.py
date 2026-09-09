@@ -26,8 +26,7 @@ import os
 import sys
 from pathlib import Path
 
-
-OUTPUT_FIELDS = ["owner", "directory"]
+from cryosparc_project_io import MINIMAL_CSV_FIELDS as OUTPUT_FIELDS
 
 
 def parse_source(value: str) -> tuple[str, Path]:

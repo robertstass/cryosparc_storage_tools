@@ -18,6 +18,7 @@ dependencies = [
 [project.scripts]
 cryosparc-archive = "cryosparc_archive:main"
 cryosparc-live-clear-particles = "cryosparc_live_clear_particles:main"
+cryosparc-live-scan-particles = "cryosparc_live_scan_particles:main"
 cryosparc-storage-scan = "cryosparc_storage_scan:main"
 cryosparc-storage-display = "cryosparc_storage_display:main"
 cryosparc-manage-projectdata-to-csv = "cryosparc_manage_projectData_to_csv:main"
@@ -31,8 +32,10 @@ build-backend = "setuptools.build_meta"
 py-modules = [
     "cryosparc_archive",
     "cryosparc_live_clear_particles",
+    "cryosparc_live_scan_particles",
     "cryosparc_storage_scan",
     "cryosparc_storage_display",
     "cryosparc_manage_projectData_to_csv",
     "cryosparc_project_sources_owner_directory",
+    "cryosparc_project_io",
 ]

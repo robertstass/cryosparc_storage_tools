@@ -5,7 +5,7 @@ A small collection of command-line utilities for understanding and managing the 
 Largely vibe coded by Robert Stass, Bowden group, Strubi, University of Oxford. 
 
 > [!IMPORTANT]
-> These tools have different safety properties. `cryosparc-archive` is read-only with respect to the CryoSPARC project directory. `cryosparc-live-clear-particles` deliberately deletes particle stack files. Read the tool-specific notes below before using either one.
+> These tools have different safety properties. `cryosparc-archive` and `cryosparc-live-scan-particles` are read-only with respect to the CryoSPARC project directory. `cryosparc-live-clear-particles` deliberately deletes particle stack files. Read the tool-specific notes below before using either one.
 
 ## Included tools
 
@@ -13,10 +13,12 @@ Largely vibe coded by Robert Stass, Bowden group, Strubi, University of Oxford.
 |---|---|---|
 | `cryosparc_archive.py` | `cryosparc-archive` | Create a compact, offline archive of project metadata and selected job outputs. |
 | `cryosparc_live_clear_particles.py` | `cryosparc-live-clear-particles` | Delete extracted particle `.mrc` stacks from a CryoSPARC Live session while retaining micrographs and extraction metadata. |
+| `cryosparc_live_scan_particles.py` | `cryosparc-live-scan-particles` | Read-only scan for CryoSPARC Live sessions with reclaimable extracted-particle `.mrc` stacks, to identify sessions worth sending to `cryosparc-live-clear-particles`. |
 | `cryosparc_storage_scan.py` | `cryosparc-storage-scan` | Measure storage used by CryoSPARC job directories from a projectData HTML/CSV source. |
 | `cryosparc_storage_display.py` | `cryosparc-storage-display` | Turn storage-scan CSV output into an interactive Plotly HTML report. |
 | `cryosparc_manage_projectData_to_csv.py` | `cryosparc-manage-projectdata-to-csv` | Convert a saved CryoSPARC Manage → ProjectData HTML page to CSV. |
 | `cryosparc_project_sources_owner_directory.py` | `cryosparc-project-sources-owner-directory` | Build a minimal `owner,directory` CSV by scanning one or more owner-associated project roots. |
+| `cryosparc_project_io.py` | *(not a CLI tool)* | Shared library for CryoSPARC project-table/CSV parsing, used by `cryosparc-storage-scan`, `cryosparc-live-scan-particles`, `cryosparc-manage-projectdata-to-csv`, and `cryosparc-project-sources-owner-directory`. |
 
 ## Installation
 
@@ -113,6 +115,32 @@ cryosparc-live-clear-particles \
     --live-uid S1 \
     --scan-mode estimate
 ```
+
+---
+
+## `cryosparc-live-scan-particles`
+
+`cryosparc_live_scan_particles.py` is a fast, **strictly read-only** companion to `cryosparc-storage-scan` and `cryosparc-live-clear-particles`. It accepts the same projectData CSV/HTML input as `cryosparc-storage-scan`, and for every selected project looks for CryoSPARC Live session directories (`S1`, `S2`, ...) and checks their `extract/blob` particle directories for `.mrc` files. It reuses the same particle-finding and `estimate`-mode sampling logic as `cryosparc-live-clear-particles`, so the numbers line up between the two tools.
+
+Unlike `cryosparc-storage-scan`, this never runs `du` and never measures whole job directories — it only looks inside each session's `extract/blob` directory — so it is normally much quicker to run, especially with `--scan-mode skip`. It never deletes or modifies anything; use the reported `project directory` / `live_uid` pairs with `cryosparc-live-clear-particles` to actually reclaim space.
+
+Some `S<n>` directories will have no `extract`/`blob` directory at all (never Live-processed, or a different job type), and others will have an `extract/blob` directory whose `.mrc` files were already deleted. Both are reported without error, separately from sessions that still have reclaimable particles.
+
+```bash
+# Estimate reclaimable particle-stack space for every project (default scan mode)
+cryosparc-live-scan-particles projectData.csv
+
+# Fastest pass: just report which sessions still have particle files, no sizing
+cryosparc-live-scan-particles projectData.csv --scan-mode skip
+
+# Exact sizes (slower: stats every .mrc file instead of sampling)
+cryosparc-live-scan-particles projectData.csv --scan-mode full
+
+# Restrict to one owner, and also save the findings to a text file
+cryosparc-live-scan-particles projectData.csv --owner RobertS -o findings.txt
+```
+
+`--scan-mode estimate` (the default) matches `cryosparc-live-clear-particles`'s own estimate mode: it samples up to 10 `.mrc` files per blob subdirectory and extrapolates. `--scan-mode skip` skips sizing entirely and is the quickest option for a first pass across many projects. `-o/--output` writes the same findings to a text file in addition to stdout. `--parallel` controls how many Live sessions are inspected concurrently (default 4).
 
 ---
 
@@ -233,9 +261,10 @@ Use `--append` to add newly discovered projects to an existing CSV.
 
 1. Obtain project locations either by saving **Manage → ProjectData** from CryoSPARC or by using `cryosparc-project-sources-owner-directory`.
 2. If desired, convert the saved HTML to CSV with `cryosparc-manage-projectdata-to-csv`.
-3. Run `cryosparc-storage-scan` (preferably in a queue or under `nohup` for a large installation).
-4. Run `cryosparc-storage-display` on the resulting `jobs.csv` to inspect the largest projects/jobs and storage by owner/job type.
-5. Decide what should be archived or removed. Use `cryosparc-archive` for an offline record of selected project results; use `cryosparc-live-clear-particles` only when intentionally deleting regenerable Live particle stacks.
+3. Run `cryosparc-live-scan-particles` first — it's quick and read-only, and highlights which Live sessions still have reclaimable particle `.mrc` stacks worth clearing.
+4. Run `cryosparc-storage-scan` for the fuller picture (preferably in a queue or under `nohup` for a large installation).
+5. Run `cryosparc-storage-display` on the resulting `jobs.csv` to inspect the largest projects/jobs and storage by owner/job type.
+6. Decide what should be archived or removed. Use `cryosparc-archive` for an offline record of selected project results; use `cryosparc-live-clear-particles` to delete the Live particle stacks identified in step 3 (only when intentionally deleting regenerable data).
 
 ## Tests
 
@@ -245,6 +274,6 @@ A single self-contained test harness exercises the archive tool and the other st
 python test_cryosparc_storage_tools.py
 ```
 
-The archive integration test checks output naming, metadata layout and deep-archive modes. The storage tests cover project-source discovery, `du`-based scanning, ProjectData HTML conversion, Plotly report generation, and Live particle cleanup in `--dry-run` mode only. No test intentionally deletes particle data, and no real CryoSPARC installation is required.
+The archive integration test checks output naming, metadata layout and deep-archive modes. The storage tests cover project-source discovery, `du`-based scanning, ProjectData HTML conversion, Plotly report generation, the strictly read-only Live particle scan, and Live particle cleanup in `--dry-run` mode only. No test intentionally deletes particle data, and no real CryoSPARC installation is required.
 
 The test harness explicitly uses UTF-8 for subprocess output and its own console streams so Unicode characters emitted by the tools do not fail on Windows systems whose default Python text encoding is `cp1252`. The display/conversion tests require the repository dependencies to be installed.
