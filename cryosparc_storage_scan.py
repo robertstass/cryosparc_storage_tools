@@ -8,7 +8,9 @@ The input is either:
 Unlike the older shell scanner, this does not search top-level directories for
 projects.  It uses the CryoSPARC table's Directory column as the authoritative
 project path, optionally filters projects by Owner, discovers immediate J<number>
-job directories, and runs native `du` for size measurement.
+job directories and S<number> Live session directories, and runs native `du`
+for size measurement. Live session directories are reported with
+job_type "live" (see detect_job_type()).
 
 The output columns intentionally match the old cryosparc_storage_scan.sh:
     tld,project,owner,job,bytes,job_type,path
@@ -65,7 +67,11 @@ from typing import Iterator, Sequence
 from cryosparc_project_io import Project, filter_projects, load_projects
 
 OUTPUT_FIELDS = ["tld", "project", "owner", "job", "bytes", "job_type", "path"]
-JOB_RE = re.compile(r"^J(\d+)$")
+# Matches both regular job directories (J<number>) and CryoSPARC Live session
+# directories (S<number>). Live sessions used to be included in this scan as
+# a "job"; detect_job_type() below already classifies them as "live" via the
+# exposures.bson marker file every Live session directory contains directly.
+JOB_RE = re.compile(r"^(?:J|S)(\d+)$")
 
 
 @dataclass(frozen=True)
@@ -88,7 +94,7 @@ def job_sort_key(job_name: str) -> tuple[int, str]:
 
 
 def discover_jobs(project: Project) -> list[Job]:
-    """Discover immediate CryoSPARC J<number> directories using scandir()."""
+    """Discover immediate CryoSPARC J<number> and Live S<number> directories using scandir()."""
     jobs: list[Job] = []
     with os.scandir(project.directory) as entries:
         for entry in entries:
@@ -365,7 +371,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{len(project_jobs)} job(s)\t{project.directory}"
             )
 
-    print(f"Discovered {len(jobs)} J<number> job directorie(s)")
+    print(f"Discovered {len(jobs)} J<number>/S<number> job/session directorie(s)")
     if missing_projects:
         print(f"Skipped {missing_projects} missing project directorie(s)")
 

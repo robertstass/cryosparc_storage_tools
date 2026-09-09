@@ -246,6 +246,13 @@ def test_project_sources_and_storage_scan(tmp: Path) -> tuple[Path, Path]:
     )
     (job / "payload.bin").write_bytes(b"x" * 4096)
 
+    # Regression coverage: Live session (S<number>) directories must be
+    # discovered and sized alongside regular J<number> jobs, and reported
+    # with job_type "live" (detected via the exposures.bson marker file).
+    session = project / "S1"
+    session.mkdir()
+    (session / "exposures.bson").write_bytes(b"y" * 2048)
+
     projects_csv = tmp / "projects.csv"
     run_script(
         "cryosparc_project_sources_owner_directory.py",
@@ -268,12 +275,15 @@ def test_project_sources_and_storage_scan(tmp: Path) -> tuple[Path, Path]:
     )
     with jobs_csv.open(newline="", encoding="utf-8") as handle:
         jobs = list(csv.DictReader(handle))
-    assert len(jobs) == 1, jobs
-    assert jobs[0]["owner"] == "TestOwner"
-    assert jobs[0]["job"] == "J1"
-    assert jobs[0]["job_type"] == "import_movies"
-    assert int(jobs[0]["bytes"]) > 0
-    print("OK: project-source discovery and storage scan")
+    assert len(jobs) == 2, jobs
+    by_job = {row["job"]: row for row in jobs}
+    assert by_job["J1"]["owner"] == "TestOwner"
+    assert by_job["J1"]["job_type"] == "import_movies"
+    assert int(by_job["J1"]["bytes"]) > 0
+    assert by_job["S1"]["owner"] == "TestOwner"
+    assert by_job["S1"]["job_type"] == "live"
+    assert int(by_job["S1"]["bytes"]) > 0
+    print("OK: project-source discovery and storage scan (jobs + Live sessions)")
     return project, jobs_csv
 
 

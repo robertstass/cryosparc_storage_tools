@@ -169,6 +169,9 @@ cryosparc-storage-scan 'Manage_ projectData _ CryoSPARC.html' -o jobs.csv
 
 HTML input requires BeautifulSoup, which is installed automatically with this repository. You can also first convert the page to CSV with `cryosparc-manage-projectdata-to-csv`.
 
+> [!NOTE]
+> **Relationship to `cryosparc-live-scan-particles`.** This tool reports the *total* on-disk size of each `S<number>` Live session directory (everything: micrographs, motion correction, CTF, extracted particles, thumbnails, etc.), the same as it does for a `J<number>` job. `cryosparc-live-scan-particles` measures something narrower and complementary: just the reclaimable `.mrc` particle stacks inside a session's `extract/blob` subdirectory. Use this tool for overall storage accounting and `cryosparc-live-scan-particles` to decide which sessions are worth sending to `cryosparc-live-clear-particles`.
+
 ### Long-running scans
 
 A full storage scan is likely to take a long time on a large CryoSPARC installation — potentially several hours — because `du` must traverse many job directories. It is sensible to run it as a queued batch job where available, or under `nohup` so an SSH/network disconnection does not kill the scan. For example:
