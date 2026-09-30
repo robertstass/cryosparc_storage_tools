@@ -1,6 +1,6 @@
 [project]
 name = "cryosparc-storage-tools"
-version = "0.1.0"
+version = "0.1.1"
 description = "Utilities for archiving, cleaning, scanning, and visualizing CryoSPARC project storage."
 readme = "README.md"
 requires-python = ">=3.9"

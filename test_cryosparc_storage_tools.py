@@ -242,7 +242,7 @@ def test_project_sources_and_storage_scan(tmp: Path) -> tuple[Path, Path]:
     job = project / "J1"
     job.mkdir()
     (job / "job.json").write_text(
-        json.dumps({"uid": "J1", "job_type": "import_movies"}), encoding="utf-8"
+        json.dumps({"uid": "J1", "job_type": "import_movies", "workspace_uids": ["W1", "W2"]}), encoding="utf-8"
     )
     (job / "payload.bin").write_bytes(b"x" * 4096)
 
@@ -252,6 +252,9 @@ def test_project_sources_and_storage_scan(tmp: Path) -> tuple[Path, Path]:
     session = project / "S1"
     session.mkdir()
     (session / "exposures.bson").write_bytes(b"y" * 2048)
+    (session / "job.json").write_text(
+        json.dumps({"uid": "S1", "job_type": "live", "workspace_uids": ["W9"]}), encoding="utf-8"
+    )
 
     projects_csv = tmp / "projects.csv"
     run_script(
@@ -279,9 +282,11 @@ def test_project_sources_and_storage_scan(tmp: Path) -> tuple[Path, Path]:
     by_job = {row["job"]: row for row in jobs}
     assert by_job["J1"]["owner"] == "TestOwner"
     assert by_job["J1"]["job_type"] == "import_movies"
+    assert by_job["J1"]["workspace_uids"] == "W1,W2"
     assert int(by_job["J1"]["bytes"]) > 0
     assert by_job["S1"]["owner"] == "TestOwner"
     assert by_job["S1"]["job_type"] == "live"
+    assert by_job["S1"]["workspace_uids"] == ""
     assert int(by_job["S1"]["bytes"]) > 0
     print("OK: project-source discovery and storage scan (jobs + Live sessions)")
     return project, jobs_csv
@@ -312,6 +317,7 @@ def test_storage_display(tmp: Path, jobs_csv: Path) -> None:
     text = report.read_text(encoding="utf-8")
     assert "Storage report" in text
     assert "plotly" in text.lower()
+    assert "Workspace UID(s): W1,W2" in text
     print("OK: storage display HTML generation")
 
 

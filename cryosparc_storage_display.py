@@ -32,6 +32,7 @@ def read_rows(csvfile):
             # New scanner output uses lowercase 'owner'. Accept 'Owner' too,
             # and remain usable with older CSVs that did not contain it.
             r['owner'] = r.get('owner', '') or r.get('Owner', '') or "unknown"
+            r['workspace_uids'] = r.get('workspace_uids', '') or ''
             rows.append(r)
     return rows
 
@@ -101,7 +102,12 @@ def build_jobs_bar(rows, top_n, owner_color_map, total_bytes):
     top = sorted(rows, key=lambda r: r['bytes'], reverse=True)[:top_n]
     labels = [ f"{r['job']}<br><span style='font-size:0.9em;color:gray'>({html.escape(r['project'])})</span>" for r in top ]
     y = [ bytes_to_gib(r['bytes']) for r in top ]
-    hover = [ f"Path: {html.escape(r.get('path',''))}<br>Owner: {html.escape(r.get('owner','unknown'))}<br>TLD: {html.escape(r.get('tld',''))}<br>Project: {html.escape(r.get('project',''))}<br>Job: {html.escape(r.get('job',''))}<br>Job type: {html.escape(r.get('job_type','unknown'))}<br>Size: {human_readable_bytes(r['bytes'])}" for r in top ]
+    hover = [
+        f"Path: {html.escape(r.get('path',''))}<br>Owner: {html.escape(r.get('owner','unknown'))}<br>TLD: {html.escape(r.get('tld',''))}<br>Project: {html.escape(r.get('project',''))}<br>Job: {html.escape(r.get('job',''))}<br>Job type: {html.escape(r.get('job_type','unknown'))}"
+        + (f"<br>Workspace UID(s): {html.escape(r.get('workspace_uids',''))}" if r.get('workspace_uids') else "")
+        + f"<br>Size: {human_readable_bytes(r['bytes'])}"
+        for r in top
+    ]
     colors = [ owner_color_map.get(r.get('owner','unknown'), None) for r in top ]
 
     trace = go.Bar(x=labels, y=y, marker=dict(color=colors), hovertext=hover)
@@ -189,7 +195,11 @@ def build_jobs_pie(rows, owner_color_map, pie_top):
     for r in top_items:
         labels.append(f"{r['project']}/{r['job']}")
         values.append(r['bytes'])
-        hover.append(f"Path: {html.escape(r.get('path',''))}<br>Owner: {html.escape(r.get('owner','unknown'))}<br>Job type: {html.escape(r.get('job_type','unknown'))}<br>Size: {human_readable_bytes(r['bytes'])}")
+        hover.append(
+            f"Path: {html.escape(r.get('path',''))}<br>Owner: {html.escape(r.get('owner','unknown'))}<br>Job type: {html.escape(r.get('job_type','unknown'))}"
+            + (f"<br>Workspace UID(s): {html.escape(r.get('workspace_uids',''))}" if r.get('workspace_uids') else "")
+            + f"<br>Size: {human_readable_bytes(r['bytes'])}"
+        )
         colors.append(owner_color_map.get(r.get('owner','unknown'), None))
         customdata.append(r.get('path',''))
 
@@ -464,7 +474,7 @@ document.addEventListener('DOMContentLoaded', function(){ setTimeout(createPlots
 # -------- main --------
 def main():
     parser = argparse.ArgumentParser(description="Combined Plotly report with pies grouped into 'Other'")
-    parser.add_argument('csvfile', help='CSV file (tld,project,owner,job,bytes,job_type,path)')
+    parser.add_argument('csvfile', help='CSV file (tld,project,owner,job,bytes,job_type,workspace_uids,path)')
     parser.add_argument('--top', type=int, default=10, help='Top N for bars and labeled pie slices')
     parser.add_argument('--pie-top', type=int, default=20, help='Top M slices shown in pies before grouping rest into Other (default 20)')
     parser.add_argument('--type-top', type=int, default=10, help='Top K job types shown before grouping rest into Other (default 10)')

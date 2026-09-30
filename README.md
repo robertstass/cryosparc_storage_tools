@@ -152,8 +152,10 @@ cryosparc-live-scan-particles projectData.csv --owner RobertS -o findings.txt
 `cryosparc_storage_scan.py` measures storage used by immediate `J<number>` job directories for projects listed in a CryoSPARC ProjectData export. It writes a CSV with:
 
 ```text
-tld,project,owner,job,bytes,job_type,path
+tld,project,owner,job,bytes,job_type,workspace_uids,path
 ```
+
+For regular jobs, `workspace_uids` contains the comma-separated workspace UID(s) from the job's `job.json` (for example `W1,W2`). CSV quoting is handled automatically when multiple UIDs are present. Live jobs/sessions leave this field blank.
 
 The input can be either a CSV or a saved CryoSPARC ProjectData HTML page.
 
@@ -208,7 +210,7 @@ cryosparc-storage-scan projectData.csv --list-owners
 
 ## `cryosparc-storage-display`
 
-`cryosparc_storage_display.py` reads the CSV produced by `cryosparc-storage-scan` and creates an interactive Plotly HTML storage report. The report includes views of the largest jobs and projects, storage by owner, and storage by job type. Clicking plotted jobs/projects can copy associated paths to the clipboard in the generated page.
+`cryosparc_storage_display.py` reads the CSV produced by `cryosparc-storage-scan` and creates an interactive Plotly HTML storage report. The report includes views of the largest jobs and projects, storage by owner, and storage by job type. Job hover tooltips also show the recorded workspace UID(s). Clicking plotted jobs/projects can copy associated paths to the clipboard in the generated page.
 
 ```bash
 cryosparc-storage-display jobs.csv --out storage_report.html --no-open

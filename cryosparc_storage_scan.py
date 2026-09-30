@@ -66,7 +66,7 @@ from typing import Iterator, Sequence
 
 from cryosparc_project_io import Project, filter_projects, load_projects
 
-OUTPUT_FIELDS = ["tld", "project", "owner", "job", "bytes", "job_type", "path"]
+OUTPUT_FIELDS = ["tld", "project", "owner", "job", "bytes", "job_type", "workspace_uids", "path"]
 # Matches both regular job directories (J<number>) and CryoSPARC Live session
 # directories (S<number>). Live sessions used to be included in this scan as
 # a "job"; detect_job_type() below already classifies them as "live" via the
@@ -86,6 +86,7 @@ class JobResult:
     job: Job
     bytes_used: int
     job_type: str
+    workspace_uids: str
 
 
 def job_sort_key(job_name: str) -> tuple[int, str]:
@@ -135,6 +136,30 @@ def detect_job_type(job_dir: Path) -> str:
             pass
 
     return "unknown"
+
+
+def extract_workspace_uids(job_dir: Path, job_type: str) -> str:
+    """Return workspace UIDs as a comma-separated CSV field.
+
+    Live jobs deliberately leave this blank. csv.DictWriter handles quoting when
+    multiple workspace UIDs introduce commas into the field.
+    """
+    if job_type == "live":
+        return ""
+
+    json_path = job_dir / "job.json"
+    if not json_path.is_file():
+        return ""
+    try:
+        with json_path.open("r", encoding="utf-8", errors="replace") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return ""
+
+    values = data.get("workspace_uids") if isinstance(data, dict) else None
+    if not isinstance(values, list):
+        return ""
+    return ",".join(str(value).strip() for value in values if str(value).strip())
 
 
 def gnu_du_available(du_bin: str) -> bool:
@@ -198,7 +223,13 @@ def measure_bytes(job_dir: Path, du_bin: str, size_mode: str, gnu_du: bool) -> i
 
 def scan_one(job: Job, du_bin: str, size_mode: str, gnu_du: bool) -> JobResult:
     bytes_used = measure_bytes(job.path, du_bin, size_mode, gnu_du)
-    return JobResult(job=job, bytes_used=bytes_used, job_type=detect_job_type(job.path))
+    job_type = detect_job_type(job.path)
+    return JobResult(
+        job=job,
+        bytes_used=bytes_used,
+        job_type=job_type,
+        workspace_uids=extract_workspace_uids(job.path, job_type),
+    )
 
 
 def existing_completed_paths(output: Path) -> set[str]:
@@ -267,6 +298,7 @@ def result_to_row(result: JobResult) -> dict[str, object]:
         "job": result.job.job_name,
         "bytes": result.bytes_used,
         "job_type": result.job_type,
+        "workspace_uids": result.workspace_uids,
         "path": str(result.job.path),
     }
 
