@@ -475,7 +475,7 @@ document.addEventListener('DOMContentLoaded', function(){ setTimeout(createPlots
 def main():
     parser = argparse.ArgumentParser(description="Combined Plotly report with pies grouped into 'Other'")
     parser.add_argument('csvfile', help='CSV file (tld,project,owner,job,bytes,job_type,workspace_uids,path)')
-    parser.add_argument('--top', type=int, default=10, help='Top N for bars and labeled pie slices')
+    parser.add_argument('--top', type=int, default=20, help='Top N for bars and labeled pie slices')
     parser.add_argument('--pie-top', type=int, default=20, help='Top M slices shown in pies before grouping rest into Other (default 20)')
     parser.add_argument('--type-top', type=int, default=10, help='Top K job types shown before grouping rest into Other (default 10)')
     parser.add_argument('--out', default='report.html', help='Output HTML file')
@@ -488,7 +488,6 @@ def main():
     rows = read_rows(args.csvfile)
     if not rows:
         print("No rows in CSV."); return
-
     # Optional owner restriction. Matching is case-insensitive but otherwise exact.
     requested_owners = []
     for value in args.owner:
@@ -506,7 +505,6 @@ def main():
 
     total_bytes = sum(r['bytes'] for r in rows)
     print(f"Loaded {len(rows)} rows. Total {human_readable_bytes(total_bytes)} ({total_bytes:,} bytes)")
-
     owner_color_map = assign_owner_colors(rows, args.colormap)
 
     jobs_bar = build_jobs_bar(rows, args.top, owner_color_map, total_bytes)
