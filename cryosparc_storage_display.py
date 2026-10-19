@@ -12,10 +12,12 @@ import argparse
 import os
 import html
 import json
+import re
 import shutil
 import subprocess
 import webbrowser
 from collections import defaultdict
+from datetime import datetime, timedelta
 import plotly.graph_objects as go
 
 # -------- helpers --------
@@ -35,6 +37,74 @@ def read_rows(csvfile):
             r['workspace_uids'] = r.get('workspace_uids', '') or ''
             rows.append(r)
     return rows
+
+def parse_row_date(value):
+    """Parse a 'date' column value written by cryosparc_storage_scan.py.
+
+    Returns a naive datetime, or None if the value is missing or unparseable
+    (e.g. a CSV produced by a scanner version that predates the 'date'
+    column, or a row where even the mtime fallback failed).
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+def parse_older_than(value):
+    """Parse an --older-than cutoff into a naive datetime.
+
+    Accepts either an absolute ISO8601 date/datetime (e.g. 2025-01-01) or a
+    relative age <N><unit> where unit is d(ays), w(eeks), m(onths, ~30 days)
+    or y(ears, ~365 days) -- e.g. 180d, 26w, 6m, 1y. Raises ValueError with
+    a human-readable message on anything else.
+    """
+    text = value.strip()
+    match = re.fullmatch(r"(\d+)\s*([dwmy])", text, re.IGNORECASE)
+    if match:
+        amount = int(match.group(1))
+        days_per_unit = {"d": 1, "w": 7, "m": 30, "y": 365}[match.group(2).lower()]
+        return datetime.now() - timedelta(days=amount * days_per_unit)
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        raise ValueError(
+            f"Could not parse --older-than value {value!r}. "
+            "Use an absolute date (e.g. 2025-01-01) or a relative age (e.g. 180d, 26w, 6m, 1y)."
+        )
+
+def project_key(row):
+    return (row.get('tld', ''), row.get('project', ''))
+
+def filter_older_than(rows, cutoff):
+    """Keep only rows whose PROJECT is older than cutoff.
+
+    Each job keeps its own date, but a project's date for this purpose is
+    the most recent date among all of its jobs/Live sessions -- so a
+    project is only considered "old" once nothing in it has been touched
+    since the cutoff. This keeps every chart (which groups by project as
+    well as by job) consistent: an old job isn't shown as reclaimable on its
+    own if its project is still active.
+
+    Returns (kept_rows, excluded_project_count) where excluded_project_count
+    counts projects dropped because none of their rows had a parseable date
+    (so staleness could not be confirmed), not because they were too recent.
+    """
+    project_dates = {}
+    for r in rows:
+        d = parse_row_date(r.get('date'))
+        if d is None:
+            continue
+        key = project_key(r)
+        if key not in project_dates or d > project_dates[key]:
+            project_dates[key] = d
+
+    all_projects = {project_key(r) for r in rows}
+    unknown_projects = all_projects - set(project_dates)
+
+    kept = [r for r in rows if project_dates.get(project_key(r), cutoff) < cutoff]
+    return kept, len(unknown_projects)
 
 def human_readable_bytes(n):
     if n < 1024:
@@ -474,8 +544,8 @@ document.addEventListener('DOMContentLoaded', function(){ setTimeout(createPlots
 # -------- main --------
 def main():
     parser = argparse.ArgumentParser(description="Combined Plotly report with pies grouped into 'Other'")
-    parser.add_argument('csvfile', help='CSV file (tld,project,owner,job,bytes,job_type,workspace_uids,path)')
-    parser.add_argument('--top', type=int, default=20, help='Top N for bars and labeled pie slices')
+    parser.add_argument('csvfile', help='CSV from cryosparc-storage-scan (tld,project,owner,job,bytes,job_type,workspace_uids,path,date). Older CSVs lacking owner/workspace_uids/date are still accepted; the date column is only needed for --older-than.')
+    parser.add_argument('--top', type=int, default=10, help='Top N for bars and labeled pie slices')
     parser.add_argument('--pie-top', type=int, default=20, help='Top M slices shown in pies before grouping rest into Other (default 20)')
     parser.add_argument('--type-top', type=int, default=10, help='Top K job types shown before grouping rest into Other (default 10)')
     parser.add_argument('--out', default='report.html', help='Output HTML file')
@@ -483,11 +553,23 @@ def main():
     parser.add_argument('--no-open', action='store_true', help='Do not auto-open HTML')
     parser.add_argument('--owner', action='append', default=[], metavar='OWNER',
                         help='Restrict report to this owner. Repeat --owner for multiple owners; comma-separated names are also accepted.')
+    parser.add_argument('--older-than', default=None, metavar='CUTOFF',
+                        help="Only include projects whose most recent job/Live session is older than CUTOFF. "
+                             "CUTOFF is an absolute date (e.g. 2025-01-01) or a relative age (e.g. 180d, 26w, 6m, 1y). "
+                             "Each job keeps its own date, but a project counts as old only once ALL of its jobs "
+                             "predate the cutoff; projects with no parseable job date are excluded, not assumed old.")
     args = parser.parse_args()
+
+    if args.older_than:
+        try:
+            cutoff = parse_older_than(args.older_than)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     rows = read_rows(args.csvfile)
     if not rows:
         print("No rows in CSV."); return
+
     # Optional owner restriction. Matching is case-insensitive but otherwise exact.
     requested_owners = []
     for value in args.owner:
@@ -503,8 +585,25 @@ def main():
             )
         print(f"Owner filter: {', '.join(requested_owners)}")
 
+    if args.older_than:
+        before_projects = len({project_key(r) for r in rows})
+        rows, unknown_count = filter_older_than(rows, cutoff)
+        kept_projects = len({project_key(r) for r in rows})
+        print(
+            f"--older-than {args.older_than} (cutoff: {cutoff.date()}): "
+            f"kept {kept_projects} of {before_projects} project(s)"
+        )
+        if unknown_count:
+            print(
+                f"  {unknown_count} project(s) excluded: no job/session with a parseable date "
+                "(CSV predates the 'date' column, or no date could be determined)"
+            )
+        if not rows:
+            print("No rows remain after --older-than filtering."); return
+
     total_bytes = sum(r['bytes'] for r in rows)
     print(f"Loaded {len(rows)} rows. Total {human_readable_bytes(total_bytes)} ({total_bytes:,} bytes)")
+
     owner_color_map = assign_owner_colors(rows, args.colormap)
 
     jobs_bar = build_jobs_bar(rows, args.top, owner_color_map, total_bytes)

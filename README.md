@@ -149,13 +149,20 @@ cryosparc-live-scan-particles projectData.csv --owner RobertS -o findings.txt
 
 ## `cryosparc-storage-scan`
 
-`cryosparc_storage_scan.py` measures storage used by immediate `J<number>` job directories for projects listed in a CryoSPARC ProjectData export. It writes a CSV with:
+`cryosparc_storage_scan.py` measures storage used by immediate `J<number>` job directories **and `S<number>` CryoSPARC Live session directories** for projects listed in a CryoSPARC ProjectData export. Live sessions are reported with `job_type` set to `live` (detected via each session's `exposures.bson` marker file, which is written directly under the `S<number>` directory). It writes a CSV with:
 
 ```text
-tld,project,owner,job,bytes,job_type,workspace_uids,path
+tld,project,owner,job,bytes,job_type,workspace_uids,path,date
 ```
 
 For regular jobs, `workspace_uids` contains the comma-separated workspace UID(s) from the job's `job.json` (for example `W1,W2`). CSV quoting is handled automatically when multiple UIDs are present. Live jobs/sessions leave this field blank.
+
+`date` is each job's date, tried in this order:
+1. `job.json`'s `created_at` field (handling both a plain ISO8601 string and MongoDB's extended-JSON `{"$date": ...}` form).
+2. For Live sessions, which have no `job.json`: the most recent per-exposure `discovered_at` in `exposures.bson` — i.e. when the session last found a new micrograph. This needs `pymongo` (`pip install pymongo`, provides the `bson` module); without it, Live sessions fall through to step 3.
+3. The directory's own mtime, as a last resort — so every row always gets a usable date.
+
+`date` feeds `cryosparc-storage-display`'s `--older-than` option below.
 
 The input can be either a CSV or a saved CryoSPARC ProjectData HTML page.
 
@@ -219,6 +226,24 @@ cryosparc-storage-display jobs.csv --out storage_report.html --no-open
 Useful options include `--top`, `--pie-top`, `--type-top`, repeatable `--owner`, and `--colormap`. Named Matplotlib colormaps can be supplied through `--colormap`; comma-separated CSS colors are also accepted.
 
 The generated report loads Plotly JavaScript from the Plotly CDN when opened, so viewing it requires network access unless you modify the generated HTML separately.
+
+### Older scan CSVs
+
+The display script stays compatible with CSVs written by earlier versions of `cryosparc-storage-scan`. Columns are matched by header name (so order doesn't matter), and anything missing is defaulted: no `owner`/`Owner` column puts every row under `unknown`, a missing `job_type` becomes `unknown`, and a missing `workspace_uids` simply omits the tooltip line. The `date` column is read **only** by `--older-than`; without that option it is ignored, so reports are identical whether or not it is present. The one exception is `--older-than` itself, which needs `date`: on a CSV without one it reports that no project has a parseable date instead of guessing. Re-run `cryosparc-storage-scan` (with `--overwrite`, since `--resume` refuses to append to a CSV with a different schema) to add dates.
+
+### `--older-than`
+
+Restrict the report to projects that haven't been touched recently:
+
+```bash
+# Absolute date
+cryosparc-storage-display jobs.csv --older-than 2025-01-01 --out report.html
+
+# Relative age: <N>d (days), <N>w (weeks), <N>m (months, ~30 days), <N>y (years, ~365 days)
+cryosparc-storage-display jobs.csv --older-than 6m --out report.html
+```
+
+Each job/Live session keeps its own `date`, but a **project** only counts as old once *every* job inside it predates the cutoff — a project's effective date is the most recent date among all of its jobs. This means a project with one job from 2019 and another from last week is never shown as "old," even though most of its jobs are. Projects where no job has a parseable date (e.g. a CSV from before the `date` column existed) are excluded rather than assumed old; the tool prints how many projects were excluded for this reason, separately from how many were simply too recent.
 
 ---
 

@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 KEEP_TEST_OUTPUT = True
@@ -38,8 +39,16 @@ except (AttributeError, ValueError):
 HERE = Path(__file__).resolve().parent
 
 
-def run_script(name: str, *args: object, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    """Run one repository script with deterministic UTF-8 text handling."""
+def run_script(
+    name: str, *args: object, cwd: Path | None = None, check: bool = True
+) -> subprocess.CompletedProcess[str]:
+    """Run one repository script with deterministic UTF-8 text handling.
+
+    check=True (the default) asserts the script exited successfully, which
+    is what nearly every test wants. Pass check=False for a test that
+    deliberately exercises a failure path and wants to inspect the nonzero
+    returncode/stderr itself.
+    """
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     proc = subprocess.run(
@@ -51,7 +60,7 @@ def run_script(name: str, *args: object, cwd: Path | None = None) -> subprocess.
         errors="replace",
         env=env,
     )
-    if proc.returncode != 0:
+    if check and proc.returncode != 0:
         raise AssertionError(
             f"{name} exited {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
         )
@@ -292,6 +301,116 @@ def test_project_sources_and_storage_scan(tmp: Path) -> tuple[Path, Path]:
     return project, jobs_csv
 
 
+def test_live_session_date_from_exposures_bson(tmp: Path) -> None:
+    """Regression test for Live session dates, verified against a real
+    exposures.bson: a single top-level document wraps an 'exposures' list,
+    and each exposure has a top-level 'discovered_at' Unix-epoch float. The
+    session's date must be the MOST RECENT discovered_at across all
+    exposures (i.e. when it was last active), not the earliest, and not the
+    exposures.bson file's own mtime.
+    """
+    try:
+        import bson  # type: ignore
+    except ImportError:
+        print("SKIP: live-session exposures.bson date test (pymongo/bson not installed)")
+        return
+
+    root = tmp / "live_date_root"
+    project = root / "CS-live-date"
+    make_project(project, uid="P12", title="Live session date test")
+
+    session = project / "S1"
+    session.mkdir(parents=True)
+    exposures = {
+        "exposures": [
+            {"uid": 1, "discovered_at": 1778587147.5266905, "deleted": False},
+            {"uid": 2, "discovered_at": 1778676594.1344068, "deleted": False},  # latest
+            {"uid": 3, "discovered_at": 1778600000.0, "deleted": False},
+        ]
+    }
+    (session / "exposures.bson").write_bytes(bson.encode(exposures))
+    # Set the file's own mtime far from any discovered_at value, so a pass
+    # here can only mean the scanner actually read discovered_at and not mtime.
+    old_mtime = 1577836800  # 2020-01-01, long before any discovered_at above
+    os.utime(session / "exposures.bson", (old_mtime, old_mtime))
+
+    projects_csv = tmp / "live_date_projects.csv"
+    with projects_csv.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["owner", "directory"])
+        writer.writeheader()
+        writer.writerow({"owner": "TestOwner", "directory": str(project)})
+
+    jobs_csv = tmp / "live_date_jobs.csv"
+    run_script("cryosparc_storage_scan.py", projects_csv, "-o", jobs_csv, "--parallel", "1")
+
+    with jobs_csv.open(newline="", encoding="utf-8") as handle:
+        rows = {row["job"]: row for row in csv.DictReader(handle)}
+    assert "S1" in rows, rows
+    expected = datetime.fromtimestamp(1778676594.1344068, tz=timezone.utc).replace(tzinfo=None).isoformat()
+    assert rows["S1"]["date"] == expected, rows["S1"]["date"]
+    print("OK: Live session date uses most-recent exposures.bson discovered_at, not mtime")
+
+
+def test_job_dates_and_older_than(tmp: Path) -> None:
+    root = tmp / "date_root"
+
+    # Project A: every job/session is old -> should count as "old" overall.
+    project_a = root / "CS-old"
+    make_project(project_a, uid="P10", title="All-old project")
+    make_archive_job(project_a, "J1", "import_movies", created="2019-05-01T00:00:00.000Z")
+
+    # Project B: one old job, one recent job -> most-recent-job date wins,
+    # so the whole project must NOT count as old.
+    project_b = root / "CS-mixed"
+    make_project(project_b, uid="P11", title="Mixed-age project")
+    make_archive_job(project_b, "J1", "import_movies", created="2019-05-01T00:00:00.000Z")
+    make_archive_job(project_b, "J2", "refine", created=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"))
+
+    projects_csv = tmp / "date_projects.csv"
+    with projects_csv.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["owner", "directory"])
+        writer.writeheader()
+        writer.writerow({"owner": "TestOwner", "directory": str(project_a)})
+        writer.writerow({"owner": "TestOwner", "directory": str(project_b)})
+
+    jobs_csv = tmp / "date_jobs.csv"
+    run_script("cryosparc_storage_scan.py", projects_csv, "-o", jobs_csv, "--parallel", "1")
+
+    with jobs_csv.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 3, rows
+    for row in rows:
+        assert row["date"], f"row missing a date: {row}"
+        datetime.fromisoformat(row["date"])  # must be parseable
+
+    # --older-than 1y: only the all-old project should survive.
+    report = tmp / "date_report.html"
+    proc = run_script(
+        "cryosparc_storage_display.py", jobs_csv, "--older-than", "1y", "--out", report, "--no-open"
+    )
+    assert "kept 1 of 2 project(s)" in proc.stdout, proc.stdout
+    text = report.read_text(encoding="utf-8")
+    assert "CS-old" in text
+    assert "CS-mixed" not in text
+
+    # An invalid --older-than value must be rejected with a clear error, not a crash.
+    bad_report = tmp / "date_report_bad.html"
+    bad_proc = run_script(
+        "cryosparc_storage_display.py",
+        jobs_csv,
+        "--older-than",
+        "not-a-value",
+        "--out",
+        bad_report,
+        "--no-open",
+        check=False,
+    )
+    assert bad_proc.returncode != 0
+    assert "Could not parse --older-than value" in bad_proc.stderr
+
+    print("OK: per-job dates and --older-than (most-recent-job-as-project-date) filtering")
+
+
 def test_html_converter(tmp: Path, project_dir: Path) -> None:
     html_path = tmp / "projectData.html"
     html_path.write_text(
@@ -311,6 +430,73 @@ def test_html_converter(tmp: Path, project_dir: Path) -> None:
     print("OK: Manage ProjectData HTML-to-CSV conversion")
 
 
+def test_display_backward_compatible_csv_schemas(tmp: Path) -> None:
+    """cryosparc_storage_display.py must keep accepting scan CSVs from older
+    scanner versions. Only --older-than needs the newest 'date' column.
+
+    The same rows are written in each historical schema. Schemas that differ
+    only by columns the display ignores (workspace_uids, date) must give a
+    byte-identical report; schemas missing owner must still render, with
+    every row attributed to 'unknown'.
+    """
+    rows = [
+        {"tld": "/d/p0", "project": "CS-a", "owner": "RobS", "job": "J1", "bytes": 5000,
+         "job_type": "import_movies", "workspace_uids": "", "path": "/d/p0/CS-a/J1", "date": "2025-01-02T03:04:05"},
+        {"tld": "/d/p0", "project": "CS-a", "owner": "RobS", "job": "S1", "bytes": 9000,
+         "job_type": "live", "workspace_uids": "", "path": "/d/p0/CS-a/S1", "date": ""},
+        {"tld": "/d/p1", "project": "CS-b", "owner": "AnnaK", "job": "J2", "bytes": 7000,
+         "job_type": "refine", "workspace_uids": "", "path": "/d/p1/CS-b/J2", "date": "2024-06-01T00:00:00"},
+    ]
+    schemas = {
+        "original": ["tld", "project", "owner", "job", "bytes", "job_type", "path"],
+        "workspace_uids": ["tld", "project", "owner", "job", "bytes", "job_type", "workspace_uids", "path"],
+        "current": ["tld", "project", "owner", "job", "bytes", "job_type", "workspace_uids", "path", "date"],
+        "reordered": ["path", "bytes", "job", "project", "tld", "job_type", "owner"],
+    }
+    reports: dict[str, bytes] = {}
+    for name, fields in schemas.items():
+        csv_path = tmp / f"compat_{name}.csv"
+        with csv_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: row[k] for k in fields})
+        report = tmp / f"compat_{name}.html"
+        proc = run_script("cryosparc_storage_display.py", csv_path, "--out", report, "--no-open")
+        assert "Loaded 3 rows" in proc.stdout, (name, proc.stdout)
+        reports[name] = report.read_bytes()
+
+    for name in ("workspace_uids", "current", "reordered"):
+        assert reports[name] == reports["original"], f"{name} schema renders differently from the original schema"
+
+    # Legacy CSVs from before the owner column, and with a capitalised header.
+    no_owner = tmp / "compat_no_owner.csv"
+    no_owner.write_text(
+        "tld,project,job,bytes,job_type,path\n/d/p0,CS-a,J1,5000,import_movies,/d/p0/CS-a/J1\n",
+        encoding="utf-8",
+    )
+    proc = run_script("cryosparc_storage_display.py", no_owner, "--out", tmp / "compat_no_owner.html", "--no-open")
+    assert "Loaded 1 rows" in proc.stdout, proc.stdout
+    assert "unknown" in (tmp / "compat_no_owner.html").read_text(encoding="utf-8")
+
+    cap_owner = tmp / "compat_Owner.csv"
+    cap_owner.write_text(
+        "tld,project,Owner,job,bytes,job_type,path\n/d/p0,CS-a,RobS,J1,5000,import_movies,/d/p0/CS-a/J1\n",
+        encoding="utf-8",
+    )
+    run_script("cryosparc_storage_display.py", cap_owner, "--out", tmp / "compat_Owner.html", "--no-open")
+    assert "RobS" in (tmp / "compat_Owner.html").read_text(encoding="utf-8")
+
+    # --older-than is the one exception: without a date column it must degrade
+    # gracefully (clear message, no crash) rather than silently treat projects as old.
+    proc = run_script(
+        "cryosparc_storage_display.py", tmp / "compat_original.csv", "--older-than", "1y",
+        "--out", tmp / "compat_older.html", "--no-open",
+    )
+    assert "no job/session with a parseable date" in proc.stdout, proc.stdout
+    print("OK: display script accepts older scan CSV schemas (only --older-than needs 'date')")
+
+
 def test_storage_display(tmp: Path, jobs_csv: Path) -> None:
     report = tmp / "report.html"
     run_script("cryosparc_storage_display.py", jobs_csv, "--out", report, "--no-open")
@@ -318,6 +504,7 @@ def test_storage_display(tmp: Path, jobs_csv: Path) -> None:
     assert "Storage report" in text
     assert "plotly" in text.lower()
     assert "Workspace UID(s): W1,W2" in text
+    assert "Job type: live<br>Workspace UID(s):" not in text
     print("OK: storage display HTML generation")
 
 
@@ -498,7 +685,10 @@ def main() -> int:
     test_archive(tmp)
     project_dir, jobs_csv = test_project_sources_and_storage_scan(tmp)
     test_html_converter(tmp, project_dir)
+    test_live_session_date_from_exposures_bson(tmp)
+    test_job_dates_and_older_than(tmp)
     test_storage_display(tmp, jobs_csv)
+    test_display_backward_compatible_csv_schemas(tmp)
     test_live_clear_dry_run(tmp)
     test_find_mrc_files_avoids_per_file_stat_calls(tmp)
     test_live_scan_particles(tmp)

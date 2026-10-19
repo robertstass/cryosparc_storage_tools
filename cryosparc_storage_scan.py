@@ -12,12 +12,22 @@ job directories and S<number> Live session directories, and runs native `du`
 for size measurement. Live session directories are reported with
 job_type "live" (see detect_job_type()).
 
-The output columns intentionally match the old cryosparc_storage_scan.sh:
-    tld,project,owner,job,bytes,job_type,path
-The owner comes directly from the CryoSPARC project table.
+The output columns extend the old cryosparc_storage_scan.sh schema with
+'workspace_uids' (between job_type and path) and a trailing 'date' column:
+    tld,project,owner,job,bytes,job_type,workspace_uids,path,date
+The owner comes directly from the CryoSPARC project table. 'workspace_uids' is
+the comma-separated workspace UID(s) from a regular job's job.json (blank for
+Live sessions). 'date' is each job's creation date, in priority order:
+job.json's created_at; for Live sessions (which have no created_at) the most
+recent per-exposure discovered_at in exposures.bson, i.e. when the session last
+found a new micrograph; and finally the directory's own mtime if neither is
+available. Written as a plain ISO8601 string so cryosparc-storage-display's
+--older-than can parse it directly.
 
-CSV input uses only the Python standard library.  HTML input additionally needs
-BeautifulSoup 4 (`pip install beautifulsoup4`).
+CSV input uses only the Python standard library. HTML input additionally
+needs BeautifulSoup 4 (`pip install beautifulsoup4`). The exposures.bson date
+for Live sessions additionally needs pymongo (`pip install pymongo`, provides
+the 'bson' module); without it, Live sessions silently fall back to mtime.
 
 Examples
 --------
@@ -61,12 +71,20 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Sequence
 
 from cryosparc_project_io import Project, filter_projects, load_projects
 
-OUTPUT_FIELDS = ["tld", "project", "owner", "job", "bytes", "job_type", "workspace_uids", "path"]
+try:
+    import bson  # from pymongo; optional, only needed for Live exposures.bson
+    from bson.codec_options import CodecOptions
+    from bson.raw_bson import RawBSONDocument
+except ImportError:
+    bson = None
+
+OUTPUT_FIELDS = ["tld", "project", "owner", "job", "bytes", "job_type", "workspace_uids", "path", "date"]
 # Matches both regular job directories (J<number>) and CryoSPARC Live session
 # directories (S<number>). Live sessions used to be included in this scan as
 # a "job"; detect_job_type() below already classifies them as "live" via the
@@ -87,6 +105,7 @@ class JobResult:
     bytes_used: int
     job_type: str
     workspace_uids: str
+    date: str
 
 
 def job_sort_key(job_name: str) -> tuple[int, str]:
@@ -162,6 +181,123 @@ def extract_workspace_uids(job_dir: Path, job_type: str) -> str:
     return ",".join(str(value).strip() for value in values if str(value).strip())
 
 
+def parse_job_json_date(value: object) -> datetime | None:
+    """Parse a job.json-style date value into a naive UTC datetime.
+
+    CryoSPARC stores dates in job.json either as a plain ISO8601 string or as
+    MongoDB extended JSON: {"$date": "<ISO8601>"}. Returns None if value is
+    missing or cannot be parsed. Any timezone info present in the source is
+    converted to UTC and then dropped, so the result can be compared and
+    sorted directly against other dates produced by this function.
+    """
+    if isinstance(value, dict):
+        value = value.get("$date")
+    if not isinstance(value, str) or not value.strip():
+        return None
+
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+
+    dt = None
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(text, fmt)
+                break
+            except ValueError:
+                continue
+
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def get_live_session_date(session_dir: Path) -> str:
+    """Best-effort ISO8601 date for a Live session, derived from exposures.bson.
+
+    Verified against a real exposures.bson: a single top-level BSON document
+    wraps an 'exposures' list, and each exposure record has a top-level
+    'discovered_at' field -- a Unix epoch float recording when CryoSPARC Live
+    found that micrograph. This returns the MOST RECENT discovered_at across
+    all exposures, i.e. when the session last found new data, which is a far
+    more accurate staleness signal than the exposures.bson file's own mtime
+    (which can be touched by unrelated housekeeping).
+
+    Decodes with pymongo's RawBSONDocument, which decodes lazily: every other
+    per-exposure field (embedded preview-image id lists, per-movie path and
+    group metadata, etc.) is left undecoded. On a real ~100 MB/15,000-exposure
+    exposures.bson this is roughly 3x faster than a full bson.decode_all, and
+    avoids allocating Python objects for data this function never looks at.
+
+    Returns "" (caller falls back to directory mtime) if pymongo isn't
+    installed, exposures.bson is missing, or the file can't be parsed as
+    expected -- this is unverified external data that may be absent,
+    truncated, or from a future CryoSPARC format, so failures here must
+    never abort the scan.
+    """
+    if bson is None:
+        return ""
+    bson_path = session_dir / "exposures.bson"
+    if not bson_path.is_file():
+        return ""
+    try:
+        data = bson_path.read_bytes()
+        opts = CodecOptions(document_class=RawBSONDocument)
+        doc = bson.BSON(data).decode(codec_options=opts)
+        exposures = doc.get("exposures")
+        if not exposures:
+            return ""
+        latest = None
+        for exposure in exposures:
+            value = exposure.get("discovered_at")
+            if isinstance(value, (int, float)) and (latest is None or value > latest):
+                latest = value
+        if latest is None:
+            return ""
+        return datetime.fromtimestamp(latest, tz=timezone.utc).replace(tzinfo=None).isoformat()
+    except Exception:
+        return ""
+
+
+def get_job_date(job_dir: Path) -> str:
+    """Best-effort ISO8601 date for a job or Live session.
+
+    Written to the CSV's 'date' column and consumed by the --older-than
+    filter in cryosparc-storage-display. Tries, in order: job.json's
+    created_at (CryoSPARC's own record of when a J<number> job was created);
+    for Live sessions (S<number>, which have no job.json) the most recent
+    discovered_at in exposures.bson (see get_live_session_date()); and
+    finally the directory's own mtime, so every row gets a usable date
+    rather than an empty one.
+    """
+    json_path = job_dir / "job.json"
+    if json_path.is_file():
+        try:
+            with json_path.open("r", encoding="utf-8", errors="replace") as handle:
+                data = json.load(handle)
+            if isinstance(data, dict):
+                parsed = parse_job_json_date(data.get("created_at"))
+                if parsed is not None:
+                    return parsed.isoformat()
+        except (OSError, json.JSONDecodeError, UnicodeError):
+            pass
+
+    live_date = get_live_session_date(job_dir)
+    if live_date:
+        return live_date
+
+    try:
+        mtime = job_dir.stat().st_mtime
+    except OSError:
+        return ""
+    return datetime.fromtimestamp(mtime, tz=timezone.utc).replace(tzinfo=None).isoformat()
+
+
 def gnu_du_available(du_bin: str) -> bool:
     try:
         proc = subprocess.run(
@@ -229,6 +365,7 @@ def scan_one(job: Job, du_bin: str, size_mode: str, gnu_du: bool) -> JobResult:
         bytes_used=bytes_used,
         job_type=job_type,
         workspace_uids=extract_workspace_uids(job.path, job_type),
+        date=get_job_date(job.path),
     )
 
 
@@ -300,6 +437,7 @@ def result_to_row(result: JobResult) -> dict[str, object]:
         "job_type": result.job_type,
         "workspace_uids": result.workspace_uids,
         "path": str(result.job.path),
+        "date": result.date,
     }
 
 
@@ -453,9 +591,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     writer.writerow(result_to_row(result))
                     handle.flush()  # make interruption recovery useful
                     successes += 1
+                    date_str = result.date[:10] if result.date else "unknown-date"
                     print(
                         f"[{successes}/{len(pending)}] {job.project.project_id or job.project.directory.name}/"
-                        f"{job.job_name}: {result.bytes_used} bytes ({result.job_type}) owner={job.project.owner or '-'}",
+                        f"{job.job_name}: {result.bytes_used} bytes ({result.job_type}, {date_str}) "
+                        f"owner={job.project.owner or '-'}",
                         flush=True,
                     )
     except KeyboardInterrupt:
