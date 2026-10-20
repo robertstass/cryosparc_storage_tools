@@ -545,7 +545,7 @@ document.addEventListener('DOMContentLoaded', function(){ setTimeout(createPlots
 def main():
     parser = argparse.ArgumentParser(description="Combined Plotly report with pies grouped into 'Other'")
     parser.add_argument('csvfile', help='CSV from cryosparc-storage-scan (tld,project,owner,job,bytes,job_type,workspace_uids,path,date). Older CSVs lacking owner/workspace_uids/date are still accepted; the date column is only needed for --older-than.')
-    parser.add_argument('--top', type=int, default=10, help='Top N for bars and labeled pie slices')
+    parser.add_argument('--top', type=int, default=20, help='Top N for bars and labeled pie slices')
     parser.add_argument('--pie-top', type=int, default=20, help='Top M slices shown in pies before grouping rest into Other (default 20)')
     parser.add_argument('--type-top', type=int, default=10, help='Top K job types shown before grouping rest into Other (default 10)')
     parser.add_argument('--out', default='report.html', help='Output HTML file')
