@@ -550,7 +550,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     du_bin = shutil.which("du")
     if du_bin is None:
-        print("ERROR: du not found in PATH", file=sys.stderr)
+        print(
+            "ERROR: du not found in PATH. Storage scanning is Unix-only: run "
+            "cryosparc-storage-scan on the Unix host where the CryoSPARC projects "
+            "live (or install Cygwin / Git for Windows to provide du). "
+            "--dry-run works without du.",
+            file=sys.stderr,
+        )
         return 1
     gnu_du = gnu_du_available(du_bin)
     if args.size_mode == "apparent" and not gnu_du:

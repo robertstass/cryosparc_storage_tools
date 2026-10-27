@@ -23,6 +23,7 @@ cryosparc-storage-scan = "cryosparc_storage_scan:main"
 cryosparc-storage-display = "cryosparc_storage_display:main"
 cryosparc-manage-projectdata-to-csv = "cryosparc_manage_projectData_to_csv:main"
 cryosparc-project-sources-owner-directory = "cryosparc_project_sources_owner_directory:main"
+cryosparc-storage-tools-test = "test_cryosparc_storage_tools:main"
 
 [build-system]
 requires = ["setuptools>=61.0"]
@@ -38,4 +39,5 @@ py-modules = [
     "cryosparc_manage_projectData_to_csv",
     "cryosparc_project_sources_owner_directory",
     "cryosparc_project_io",
+    "test_cryosparc_storage_tools",
 ]

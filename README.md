@@ -18,6 +18,7 @@ Largely vibe coded by Robert Stass, Bowden group, Strubi, University of Oxford.
 | `cryosparc_storage_display.py` | `cryosparc-storage-display` | Turn storage-scan CSV output into an interactive Plotly HTML report. |
 | `cryosparc_manage_projectData_to_csv.py` | `cryosparc-manage-projectdata-to-csv` | Convert a saved CryoSPARC Manage → ProjectData HTML page to CSV. |
 | `cryosparc_project_sources_owner_directory.py` | `cryosparc-project-sources-owner-directory` | Build a minimal `owner,directory` CSV by scanning one or more owner-associated project roots. |
+| `test_cryosparc_storage_tools.py` | `cryosparc-storage-tools-test` | Self-contained smoke/integration test of all the tools above using synthetic projects (see [Tests](#tests)). |
 | `cryosparc_project_io.py` | *(not a CLI tool)* | Shared library for CryoSPARC project-table/CSV parsing, used by `cryosparc-storage-scan`, `cryosparc-live-scan-particles`, `cryosparc-manage-projectdata-to-csv`, and `cryosparc-project-sources-owner-directory`. |
 
 ## Installation
@@ -35,6 +36,22 @@ For development, use an editable install:
 ```bash
 python -m pip install -e .
 ```
+
+Using [uv](https://docs.astral.sh/uv/), install the commands as isolated tools on your `PATH` (no environment to activate):
+
+```bash
+cd cryosparc_storage_tools
+uv tool install .
+```
+
+For development, install in editable mode so source changes take effect immediately, or install straight from a git remote:
+
+```bash
+uv tool install --editable .
+uv tool install git+<your-repository-url>/cryosparc_storage_tools.git
+```
+
+A non-editable `uv tool install .` is a snapshot; after changing the source, re-run it with `--reinstall` (`uv tool install --reinstall .`) to pick up the changes. If you would rather work in a project environment, `uv sync` creates `.venv` and `uv run <command>` runs any command in it, e.g. `uv run cryosparc-storage-tools-test`.
 
 Alternatively, create the supplied Conda environment and then install the repository to register the command-line entry points:
 
@@ -301,12 +318,19 @@ Use `--append` to add newly discovered projects to an existing CSV.
 
 ## Tests
 
-A single self-contained test harness exercises the archive tool and the other storage utilities using temporary synthetic CryoSPARC-like projects:
+A single self-contained test harness exercises the archive tool and the other storage utilities using temporary synthetic CryoSPARC-like projects. After installing the repository it is available as a command, so there is no need to locate the file inside your environment:
 
 ```bash
+cryosparc-storage-tools-test
+# or, from a checkout without installing:
 python test_cryosparc_storage_tools.py
+# or, with uv:
+uv run cryosparc-storage-tools-test
 ```
 
-The archive integration test checks output naming, metadata layout and deep-archive modes. The storage tests cover project-source discovery, `du`-based scanning, ProjectData HTML conversion, Plotly report generation, the strictly read-only Live particle scan, and Live particle cleanup in `--dry-run` mode only. No test intentionally deletes particle data, and no real CryoSPARC installation is required.
+The archive integration test checks output naming, metadata layout and deep-archive modes. The storage tests cover project-source discovery, `du`-based scanning, ProjectData HTML conversion, Plotly report generation, the strictly read-only Live particle scan, and Live particle cleanup in `--dry-run` mode only. No test intentionally deletes particle data, and no real CryoSPARC installation is required. Test output is written to a `cryosparc_storage_tools_test_*` directory under the directory you run it from.
+
+> [!NOTE]
+> **Windows / systems without `du`.** `cryosparc-storage-scan` shells out to `du`, so scanning is Unix-only in practice (the CryoSPARC project directories live on Unix hosts). If `du` is not on `PATH` (e.g. native Windows without Cygwin or Git for Windows), the test harness skips the tests that need the scanner, runs the storage-display tests against a synthetic scan CSV instead, and lists the skipped tests at the end. Everything else still runs, so the harness remains useful on a Windows development machine. Run it on a Unix host to exercise the scanner itself. `cryosparc-storage-scan --dry-run` also works without `du`.
 
 The test harness explicitly uses UTF-8 for subprocess output and its own console streams so Unicode characters emitted by the tools do not fail on Windows systems whose default Python text encoding is `cp1252`. The display/conversion tests require the repository dependencies to be installed.

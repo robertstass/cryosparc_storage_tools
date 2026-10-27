@@ -9,6 +9,13 @@ required.
 
 Usage:
     python test_cryosparc_storage_tools.py
+    cryosparc-storage-tools-test          (after installing the package)
+
+cryosparc_storage_scan.py shells out to `du`, so it is Unix-only in practice
+(the CryoSPARC project directories it scans live on Unix hosts). On a system
+without `du` (e.g. native Windows without Cygwin/Git-for-Windows) the tests
+that need the scanner are skipped with a message, and the display tests are
+fed a synthetic scan CSV instead so they still run.
 
 The archive test writes a temporary overview HTML. Automated checks cover the
 filesystem/output structure; interactive browser behaviour is not exercised.
@@ -27,6 +34,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 KEEP_TEST_OUTPUT = True
+
+# cryosparc_storage_scan.py needs `du`; without it the scanner-dependent tests
+# are skipped (and reported in the final summary) rather than failed.
+HAS_DU = shutil.which("du") is not None
+SKIPPED: list[str] = []
+
+
+def skip(test_name: str, reason: str) -> None:
+    SKIPPED.append(f"{test_name} ({reason})")
+    print(f"SKIP: {test_name} -- {reason}")
 
 # Windows commonly defaults redirected/console text to cp1252. The tools emit
 # Unicode punctuation/symbols, so make the test harness UTF-8-safe end-to-end.
@@ -243,6 +260,24 @@ def test_archive(tmp: Path) -> None:
 # Storage utilities
 # ---------------------------------------------------------------------------
 
+def write_synthetic_jobs_csv(path: Path, project: Path) -> None:
+    """Write the CSV cryosparc_storage_scan.py would produce for the project
+    built by test_project_sources_and_storage_scan, without needing `du`."""
+    fields = ["tld", "project", "owner", "job", "bytes", "job_type", "workspace_uids", "path", "date"]
+    rows = [
+        {"tld": str(project.parent), "project": project.name, "owner": "TestOwner", "job": "J1",
+         "bytes": 4096, "job_type": "import_movies", "workspace_uids": "W1,W2",
+         "path": str(project / "J1"), "date": ""},
+        {"tld": str(project.parent), "project": project.name, "owner": "TestOwner", "job": "S1",
+         "bytes": 2048, "job_type": "live", "workspace_uids": "",
+         "path": str(project / "S1"), "date": ""},
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def test_project_sources_and_storage_scan(tmp: Path) -> tuple[Path, Path]:
     root = tmp / "cryosparc_root"
     project = root / "CS-test"
@@ -277,6 +312,16 @@ def test_project_sources_and_storage_scan(tmp: Path) -> tuple[Path, Path]:
     assert rows == [{"owner": "TestOwner", "directory": str(project)}], rows
 
     jobs_csv = tmp / "jobs.csv"
+    if not HAS_DU:
+        skip(
+            "storage scan",
+            "`du` not found in PATH; scanning is Unix-only. "
+            "Writing a synthetic jobs.csv so the display tests can still run",
+        )
+        write_synthetic_jobs_csv(jobs_csv, project)
+        print("OK: project-source discovery (storage scan skipped, no du)")
+        return project, jobs_csv
+
     run_script(
         "cryosparc_storage_scan.py",
         projects_csv,
@@ -309,10 +354,13 @@ def test_live_session_date_from_exposures_bson(tmp: Path) -> None:
     exposures (i.e. when it was last active), not the earliest, and not the
     exposures.bson file's own mtime.
     """
+    if not HAS_DU:
+        skip("live-session exposures.bson date test", "needs cryosparc_storage_scan.py, which needs `du`")
+        return
     try:
         import bson  # type: ignore
     except ImportError:
-        print("SKIP: live-session exposures.bson date test (pymongo/bson not installed)")
+        skip("live-session exposures.bson date test", "pymongo/bson not installed")
         return
 
     root = tmp / "live_date_root"
@@ -352,6 +400,9 @@ def test_live_session_date_from_exposures_bson(tmp: Path) -> None:
 
 
 def test_job_dates_and_older_than(tmp: Path) -> None:
+    if not HAS_DU:
+        skip("per-job dates and --older-than", "needs cryosparc_storage_scan.py, which needs `du`")
+        return
     root = tmp / "date_root"
 
     # Project A: every job/session is old -> should count as "old" overall.
@@ -696,7 +747,16 @@ def main() -> int:
         print("Cleaning up test directory...")
         tempdir.cleanup()
 
-    print("ALL CRYOSPARC STORAGE TOOLS TESTS PASSED")
+    if SKIPPED:
+        print(f"\n{len(SKIPPED)} test(s) skipped:")
+        for item in SKIPPED:
+            print(f"  - {item}")
+        if not HAS_DU:
+            print(
+                "Recommendation: run this test on a Unix host (or install Cygwin / "
+                "Git for Windows so `du` is on PATH) to exercise cryosparc-storage-scan."
+            )
+    print("ALL CRYOSPARC STORAGE TOOLS TESTS PASSED" + (" (with skips)" if SKIPPED else ""))
     return 0
 
 
